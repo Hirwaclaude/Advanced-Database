@@ -1,0 +1,209 @@
+# Advanced Database Management Systems – Assignment 3
+
+**Student Name:** HIRWA Claude  
+**Reg Number:** 221028996  
+**University:** University of Rwanda  
+**Course:** Advanced Database Management Systems  
+**Instructor:** Rukundo Prince  
+
+---
+
+
+## 1) Rules (Declarative Constraints): Safe Prescriptions
+
+### Corrected Table Definition
+```sql
+-- Use schema: HEALTHNET
+-- ALTER SESSION SET CURRENT_SCHEMA = HEALTHNET;
+
+CREATE TABLE PATIENT (ID NUMBER PRIMARY KEY, NAME VARCHAR2(100) NOT NULL);
+
+CREATE TABLE PATIENT_MED (
+    PATIENT_MED_ID NUMBER PRIMARY KEY,
+    PATIENT_ID NUMBER NOT NULL REFERENCES PATIENT(ID),
+    MED_NAME VARCHAR2(80) NOT NULL,
+    DOSE_MG NUMBER(6,2) CHECK (DOSE_MG >= 0),
+    START_DT DATE,
+    END_DT DATE,
+    CONSTRAINT CK_RX_DATES_CHECK CHECK (START_DT <= END_DT OR START_DT IS NULL OR END_DT IS NULL)
+);
+```
+
+### Failing INSERTs (constraint violations)
+```sql
+INSERT INTO PATIENT_MED VALUES (1, 101, 'Aspirin', -50, DATE '2023-01-01', DATE '2023-01-10');
+INSERT INTO PATIENT_MED VALUES (2, 101, 'Ibuprofen', 200, DATE '2023-02-01', DATE '2023-01-01');
+```
+
+### Passing INSERTs (valid data)
+```sql
+INSERT INTO PATIENT_MED VALUES (1, 101, 'Aspirin', 100, DATE '2023-01-01', DATE '2023-01-10');
+INSERT INTO PATIENT_MED VALUES (2, 101, 'Ibuprofen', 200, DATE '2023-02-01', NULL);
+```
+
+---
+
+## 2) Active Databases (E-C-A Trigger): Bill Totals That Stay Correct
+
+### Corrected Statement-Level Trigger
+```sql
+CREATE TABLE BILL (ID NUMBER PRIMARY KEY, TOTAL NUMBER(12,2));
+CREATE TABLE BILL_ITEM(BILL_ID NUMBER, AMOUNT NUMBER(12,2), UPDATED_AT DATE,
+    CONSTRAINT FK_BILL_ITEM_BILL FOREIGN KEY (BILL_ID) REFERENCES BILL(ID));
+CREATE TABLE BILL_AUDIT(BILL_ID NUMBER, OLD_TOTAL NUMBER(12,2),
+    NEW_TOTAL NUMBER(12,2), CHANGED_AT DATE);
+
+CREATE OR REPLACE TRIGGER TRG_BILL_TOTAL_STMT
+AFTER INSERT OR UPDATE OR DELETE ON BILL_ITEM
+DECLARE
+    TYPE bill_id_table IS TABLE OF NUMBER;
+    affected_bills bill_id_table := bill_id_table();
+BEGIN
+    SELECT DISTINCT BILL_ID BULK COLLECT INTO affected_bills
+    FROM (
+        SELECT BILL_ID FROM BILL_ITEM WHERE BILL_ID IS NOT NULL
+        UNION
+        SELECT :NEW.BILL_ID FROM DUAL WHERE INSERTING OR UPDATING
+        UNION
+        SELECT :OLD.BILL_ID FROM DUAL WHERE DELETING OR UPDATING
+    );
+    
+    FOR i IN 1..affected_bills.COUNT LOOP
+        DECLARE
+            v_old_total NUMBER(12,2);
+            v_new_total NUMBER(12,2);
+        BEGIN
+            SELECT TOTAL INTO v_old_total FROM BILL WHERE ID = affected_bills(i);
+            SELECT NVL(SUM(AMOUNT), 0) INTO v_new_total FROM BILL_ITEM WHERE BILL_ID = affected_bills(i);
+            UPDATE BILL SET TOTAL = v_new_total WHERE ID = affected_bills(i);
+            INSERT INTO BILL_AUDIT(BILL_ID, OLD_TOTAL, NEW_TOTAL, CHANGED_AT)
+            VALUES (affected_bills(i), v_old_total, v_new_total, SYSDATE);
+        END;
+    END LOOP;
+END;
+/
+```
+
+### Test Script
+```sql
+INSERT INTO BILL VALUES (1, 0);
+INSERT INTO BILL VALUES (2, 0);
+INSERT INTO BILL_ITEM VALUES (1, 100, SYSDATE);
+INSERT INTO BILL_ITEM VALUES (1, 200, SYSDATE);
+INSERT INTO BILL_ITEM VALUES (2, 150, SYSDATE);
+UPDATE BILL_ITEM SET AMOUNT = 300 WHERE BILL_ID = 1 AND AMOUNT = 200;
+DELETE FROM BILL_ITEM WHERE BILL_ID = 2;
+SELECT * FROM BILL;
+SELECT * FROM BILL_AUDIT ORDER BY CHANGED_AT;
+```
+
+---
+
+## 3) Deductive Databases (Recursive WITH): Referral/Supervision Chain
+
+```sql
+CREATE TABLE STAFF_SUPERVISOR (EMPLOYEE VARCHAR2(50), SUPERVISOR VARCHAR2(50));
+
+WITH SUPERS(EMP, SUP, HOPS, PATH) AS (
+    SELECT EMPLOYEE, SUPERVISOR, 1, TO_CHAR(EMPLOYEE)
+    FROM STAFF_SUPERVISOR
+    WHERE SUPERVISOR IS NOT NULL
+    UNION ALL
+    SELECT S.EMP, T.SUPERVISOR, HOPS + 1, PATH || '->' || T.SUPERVISOR
+    FROM SUPERS S
+    JOIN STAFF_SUPERVISOR T ON S.SUP = T.EMPLOYEE
+    WHERE T.SUPERVISOR IS NOT NULL
+    AND INSTR(PATH, T.SUPERVISOR) = 0
+)
+SELECT EMP, SUP AS TOP_SUPERVISOR, HOPS
+FROM SUPERS
+WHERE (EMP, HOPS) IN (SELECT EMP, MAX(HOPS) FROM SUPERS GROUP BY EMP)
+ORDER BY EMP;
+```
+
+### Sample Data
+```sql
+INSERT INTO STAFF_SUPERVISOR VALUES ('Alice', 'Bob');
+INSERT INTO STAFF_SUPERVISOR VALUES ('Bob', 'Carol');
+INSERT INTO STAFF_SUPERVISOR VALUES ('Carol', 'David');
+INSERT INTO STAFF_SUPERVISOR VALUES ('David', NULL);
+INSERT INTO STAFF_SUPERVISOR VALUES ('Eve', 'Bob');
+INSERT INTO STAFF_SUPERVISOR VALUES ('Frank', 'Eve');
+```
+
+### Results
+| EMP | TOP_SUPERVISOR | HOPS |
+|-----|-----------------|------|
+| Alice | David | 3 |
+| Bob | David | 2 |
+| Carol | David | 1 |
+| Eve | David | 3 |
+| Frank | David | 4 |
+
+---
+
+## 4) Knowledge Bases (Triples & Ontology): Infectious-Disease Roll-Up
+
+```sql
+CREATE TABLE TRIPLE (S VARCHAR2(100), P VARCHAR2(50), O VARCHAR2(100));
+
+WITH ISA(CHILD, ANCESTOR) AS (
+    SELECT S, O FROM TRIPLE WHERE P = 'isA'
+    UNION ALL
+    SELECT I.CHILD, T.O
+    FROM ISA I
+    JOIN TRIPLE T ON I.ANCESTOR = T.S AND T.P = 'isA'
+),
+INFECTIOUS_PATIENTS AS (
+    SELECT DISTINCT T.S
+    FROM TRIPLE T
+    JOIN ISA ON T.O = ISA.CHILD
+    WHERE T.P = 'hasDiagnosis'
+    AND ISA.ANCESTOR = 'InfectiousDisease'
+)
+SELECT S AS PATIENT_ID FROM INFECTIOUS_PATIENTS;
+```
+
+### Sample Data
+```sql
+INSERT INTO TRIPLE VALUES ('Patient1', 'hasDiagnosis', 'Influenza');
+INSERT INTO TRIPLE VALUES ('Patient2', 'hasDiagnosis', 'Cold');
+INSERT INTO TRIPLE VALUES ('Patient3', 'hasDiagnosis', 'COVID19');
+INSERT INTO TRIPLE VALUES ('Influenza', 'isA', 'ViralInfection');
+INSERT INTO TRIPLE VALUES ('Cold', 'isA', 'ViralInfection');
+INSERT INTO TRIPLE VALUES ('COVID19', 'isA', 'ViralInfection');
+INSERT INTO TRIPLE VALUES ('ViralInfection', 'isA', 'InfectiousDisease');
+INSERT INTO TRIPLE VALUES ('BrokenArm', 'isA', 'OrthopedicInjury');
+```
+
+###  Result
+| PATIENT_ID |
+|-------------|
+| Patient1 |
+| Patient3 |
+
+---
+
+## 5) Spatial Databases (Geography & Distance): Radius & Nearest-3
+
+```sql
+CREATE TABLE CLINIC (ID NUMBER PRIMARY KEY, NAME VARCHAR2(100), GEOM SDO_GEOMETRY);
+CREATE INDEX CLINIC_SPX ON CLINIC(GEOM) INDEXTYPE IS MDSYS.SPATIAL_INDEX;
+
+SELECT C.ID, C.NAME
+FROM CLINIC C
+WHERE SDO_WITHIN_DISTANCE(
+    C.GEOM,
+    SDO_GEOMETRY(2001, 4326, SDO_POINT_TYPE(30.0600, -1.9570, NULL), NULL, NULL),
+    'distance=1 unit=KM'
+) = 'TRUE';
+
+WITH AMB_POINT AS (
+    SELECT SDO_GEOMETRY(2001, 4326, SDO_POINT_TYPE(30.0600, -1.9570, NULL), NULL, NULL) AS GEOM FROM DUAL
+)
+SELECT C.ID, C.NAME,
+    SDO_GEOM.SDO_DISTANCE(C.GEOM, A.GEOM, 1, 'unit=KM') AS KM
+FROM CLINIC C, AMB_POINT A
+ORDER BY KM
+FETCH FIRST 3 ROWS ONLY;
+```
