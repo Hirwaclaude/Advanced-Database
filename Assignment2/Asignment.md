@@ -58,7 +58,6 @@ FROM customers_A c
 JOIN rentals_B@BRANCH_B_LINK r ON c.customer_id = r.customer_id;
 ```
 
-**Result:** Successful remote access and join operation between distributed nodes.
 
 ---
 
@@ -117,7 +116,6 @@ END;
 SELECT * FROM DBA_2PC_PENDING;
 ```
 
-If no pending transactions appear, the 2PC completed successfully.
 
 **Explanation:** Oracle uses a *two-phase commit protocol* to ensure atomic distributed transactions. All nodes either commit or roll back together.
 
@@ -258,16 +256,6 @@ flowchart TD
     APP --> API[(External APIs / Auth Services)]
 ```
 
-### Explanation:
-
-* **Presentation Layer:** Handles user input and output (e.g., web forms, mobile screens). Communicates with the application layer through HTTP requests.
-* **Application Layer:** Hosts the business logic, validation, and orchestration. Runs in an app server (Spring Boot, Node.js, or Django) that connects securely to both distributed databases using JDBC/ODBC.
-* **Database Layer:** Two distributed Oracle databases (Branch_A, Branch_B) are connected via a database link. The app coordinates distributed queries, parallel loads, and commits through this layer.
-* **Data Flow:**
-
-  1. User interacts with the UI.
-  2. The application layer processes input and sends SQL/PLSQL queries to DB nodes.
-  3. Database links handle cross-node queries (e.g., branch lookups, transaction joins).
 
 ---
 
@@ -362,5 +350,3 @@ JOIN payments@BRANCH_B_LINK p ON r.rental_id = p.rental_id;
 Parallel queries dramatically reduce elapsed time for large, scan-heavy workloads. Distributed queries, though slower, provide scalability and data locality advantages. The main overhead in distributed systems is network latency and two-phase commit synchronization. Effective use of optimizer statistics, predicate pushdown, and partitioning can help reduce data movement and improve response time. Scalability is best achieved by balancing load between nodes and using parallel execution within each node.
 
 ---
-
-**End of Full Assignment Tasks (1–10)**
